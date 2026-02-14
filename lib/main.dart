@@ -174,6 +174,7 @@ class AppState extends ChangeNotifier {
   static const String _keyDisplayQueueMax = 'displayQueueMax';
   static const String _keyFadeSeconds = 'fadeSeconds';
   static const String _keyTimeRangeText = 'timeRangeText';
+  static const String _keySubTimeRangeText = 'subTimeRangeText';
   static const String _keyRulesJson = 'rulesJson';
 
   final FlutterTts _tts = FlutterTts();
@@ -185,6 +186,7 @@ class AppState extends ChangeNotifier {
   DateTime _lastPointerTime = DateTime.now();
   final Set<String> _firedEventIds = <String>{};
   bool _isSpeaking = false;
+  bool _suspendFade = false;
 
   bool initialized = false;
   DateTime now = DateTime.now();
@@ -194,6 +196,7 @@ class AppState extends ChangeNotifier {
   int displayQueueMax = 10;
   int fadeSeconds = 5;
   String timeRangeText = '09:00 - 10:00';
+  String subTimeRangeText = '09:00 - 10:00';
 
   bool isFaded = false;
   bool isMute = false;
@@ -254,6 +257,7 @@ class AppState extends ChangeNotifier {
     displayQueueMax = prefs.getInt(_keyDisplayQueueMax) ?? 10;
     fadeSeconds = prefs.getInt(_keyFadeSeconds) ?? 5;
     timeRangeText = prefs.getString(_keyTimeRangeText) ?? '09:00 - 10:00';
+    subTimeRangeText = prefs.getString(_keySubTimeRangeText) ?? timeRangeText;
 
     final rulesJson = prefs.getString(_keyRulesJson);
     if (rulesJson != null && rulesJson.isNotEmpty) {
@@ -276,6 +280,7 @@ class AppState extends ChangeNotifier {
     await prefs.setInt(_keyDisplayQueueMax, displayQueueMax);
     await prefs.setInt(_keyFadeSeconds, fadeSeconds);
     await prefs.setString(_keyTimeRangeText, timeRangeText);
+    await prefs.setString(_keySubTimeRangeText, subTimeRangeText);
     await prefs.setString(
       _keyRulesJson,
       jsonEncode(notificationRules.map((e) => e.toMap()).toList()),
@@ -317,6 +322,9 @@ class AppState extends ChangeNotifier {
 
   /// 無操作時間を監視してフェード状態を切り替える関数です。
   void _updateFadeByIdleTime() {
+    if (_suspendFade) {
+      return;
+    }
     final idleSeconds = DateTime.now().difference(_lastPointerTime).inSeconds;
     final shouldFade = idleSeconds >= fadeSeconds;
     if (shouldFade != isFaded) {
@@ -340,6 +348,7 @@ class AppState extends ChangeNotifier {
     required int newDisplayQueueMax,
     required int newFadeSeconds,
     required String newTimeRangeText,
+    required String newSubTimeRangeText,
     required List<NotificationRule> newRules,
   }) async {
     voiceMaxChars = math.max(1, newVoiceMaxChars);
@@ -347,6 +356,7 @@ class AppState extends ChangeNotifier {
     displayQueueMax = math.max(1, newDisplayQueueMax);
     fadeSeconds = math.max(1, newFadeSeconds);
     timeRangeText = newTimeRangeText;
+    subTimeRangeText = newSubTimeRangeText;
     notificationRules
       ..clear()
       ..addAll(newRules);
@@ -354,6 +364,21 @@ class AppState extends ChangeNotifier {
     _firedEventIds.clear();
     await _saveSettings();
     notifyListeners();
+  }
+
+  /// 設定ダイアログ表示中はフェードを停止し、確実に操作可能にする関数です。
+  Future<void> beginModalInteraction() async {
+    _suspendFade = true;
+    onPointerActivity();
+    if (isFaded) {
+      await _setFaded(false);
+    }
+  }
+
+  /// 設定ダイアログ終了後にフェード監視を再開する関数です。
+  void endModalInteraction() {
+    _suspendFade = false;
+    onPointerActivity();
   }
 
   /// サブ通知表示用の文字列を作成する関数です。
@@ -568,13 +593,11 @@ class AppState extends ChangeNotifier {
 
   /// 通知ルールに従って、現在有効なイベント一覧を作る関数です。
   List<EventPlan> _buildCurrentEventPlans() {
-    final range = _parseTimeRange(timeRangeText, now);
-    if (range == null) {
+    final mainRange = _parseTimeRange(timeRangeText, now);
+    if (mainRange == null) {
       return <EventPlan>[];
     }
-
-    final DateTime start = range.$1;
-    final DateTime end = range.$2;
+    final subRange = _parseTimeRange(subTimeRangeText, now) ?? mainRange;
 
     final List<EventPlan> plans = <EventPlan>[];
     for (final rule in notificationRules) {
@@ -582,6 +605,9 @@ class AppState extends ChangeNotifier {
         continue;
       }
 
+      final activeRange = rule.type == RuleType.sub ? subRange : mainRange;
+      final DateTime start = activeRange.$1;
+      final DateTime end = activeRange.$2;
       final baseTime = rule.base == RuleBase.start ? start : end;
       final eventTime = baseTime.subtract(Duration(minutes: rule.beforeMinutes!));
       final title = '${rule.typeLabel}${rule.baseLabel}';
@@ -634,13 +660,24 @@ class AppState extends ChangeNotifier {
     centerTitle = next.title;
     centerRemaining = next.time.difference(now);
 
-    final range = _parseTimeRange(timeRangeText, now);
-    if (range == null) {
+    final mainRange = _parseTimeRange(timeRangeText, now);
+    final subRange = _parseTimeRange(subTimeRangeText, now) ?? mainRange;
+    if (mainRange == null) {
       centerProgress = 0;
       return;
     }
-    final total = range.$2.difference(range.$1).inSeconds;
-    final passed = now.difference(range.$1).inSeconds;
+
+    final nextIndex = plans.indexWhere((e) => e.id == next.id);
+    DateTime progressStart;
+    if (nextIndex > 0) {
+      progressStart = plans[nextIndex - 1].time;
+    } else {
+      final baseRange = next.ruleType == RuleType.sub ? subRange : mainRange;
+      progressStart = baseRange!.$1;
+    }
+
+    final total = next.time.difference(progressStart).inSeconds;
+    final passed = now.difference(progressStart).inSeconds;
     if (total <= 0) {
       centerProgress = 0;
       return;
@@ -694,11 +731,13 @@ class TimerHomePage extends StatefulWidget {
 class _TimerHomePageState extends State<TimerHomePage> {
   /// 設定ダイアログを表示する関数です。
   Future<void> _openSettingsDialog(AppState app) async {
+    await app.beginModalInteraction();
     final voiceController = TextEditingController(text: app.voiceMaxChars.toString());
     final voiceQueueController = TextEditingController(text: app.voiceQueueMax.toString());
     final displayQueueController = TextEditingController(text: app.displayQueueMax.toString());
     final fadeController = TextEditingController(text: app.fadeSeconds.toString());
     final rangeController = TextEditingController(text: app.timeRangeText);
+    final subRangeController = TextEditingController(text: app.subTimeRangeText);
 
     final localRules = app.notificationRules
         .map(
@@ -710,130 +749,143 @@ class _TimerHomePageState extends State<TimerHomePage> {
         )
         .toList();
 
-    await showDialog<void>(
-      context: context,
-      builder: (_) {
-        return AlertDialog(
-          title: const Text('設定'),
-          content: SizedBox(
-            width: 560,
-            child: StatefulBuilder(
-              builder: (context, setLocalState) {
-                return SingleChildScrollView(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      _numberField('音声最大文字数', voiceController),
-                      _numberField('音声キュー最大数', voiceQueueController),
-                      _numberField('表示キュー最大数', displayQueueController),
-                      _numberField('フェード秒数', fadeController),
-                      const SizedBox(height: 12),
-                      TextField(
-                        controller: rangeController,
-                        decoration: const InputDecoration(
-                          labelText: '時刻範囲 (HH:MM - HH:MM)',
+    try {
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) {
+          return AlertDialog(
+            title: const Text('設定'),
+            content: SizedBox(
+              width: 560,
+              child: StatefulBuilder(
+                builder: (context, setLocalState) {
+                  return SingleChildScrollView(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _numberField('音声最大文字数', voiceController),
+                        _numberField('音声キュー最大数', voiceQueueController),
+                        _numberField('表示キュー最大数', displayQueueController),
+                        _numberField('フェード秒数', fadeController),
+                        const SizedBox(height: 12),
+                        TextField(
+                          controller: rangeController,
+                          decoration: const InputDecoration(
+                            labelText: 'メイン時刻範囲 (HH:MM - HH:MM)',
+                          ),
                         ),
-                      ),
-                      const SizedBox(height: 16),
-                      const Text('通知ルール編集'),
-                      const SizedBox(height: 8),
-                      ...localRules.asMap().entries.map((entry) {
-                        final i = entry.key;
-                        final rule = entry.value;
-                        return Row(
-                          children: [
-                            DropdownButton<RuleType>(
-                              value: rule.type,
-                              onChanged: (v) {
-                                if (v == null) {
-                                  return;
-                                }
-                                setLocalState(() {
-                                  localRules[i] = NotificationRule(
-                                    type: v,
-                                    base: rule.base,
-                                    beforeMinutes: rule.beforeMinutes,
-                                  );
-                                });
-                              },
-                              items: const [
-                                DropdownMenuItem(value: RuleType.main, child: Text('メイン')),
-                                DropdownMenuItem(value: RuleType.sub, child: Text('サブ')),
-                              ],
-                            ),
-                            const SizedBox(width: 8),
-                            DropdownButton<RuleBase>(
-                              value: rule.base,
-                              onChanged: (v) {
-                                if (v == null) {
-                                  return;
-                                }
-                                setLocalState(() {
-                                  localRules[i] = NotificationRule(
-                                    type: rule.type,
-                                    base: v,
-                                    beforeMinutes: rule.beforeMinutes,
-                                  );
-                                });
-                              },
-                              items: const [
-                                DropdownMenuItem(value: RuleBase.start, child: Text('開始')),
-                                DropdownMenuItem(value: RuleBase.end, child: Text('終了')),
-                              ],
-                            ),
-                            const SizedBox(width: 8),
-                            SizedBox(
-                              width: 110,
-                              child: TextFormField(
-                                initialValue: rule.beforeMinutes?.toString() ?? '',
-                                decoration: const InputDecoration(labelText: '分前(null可)'),
-                                keyboardType: TextInputType.number,
+                        const SizedBox(height: 8),
+                        TextField(
+                          controller: subRangeController,
+                          decoration: const InputDecoration(
+                            labelText: 'サブ時刻範囲 (HH:MM - HH:MM)',
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        const Text('通知ルール編集'),
+                        const SizedBox(height: 8),
+                        ...localRules.asMap().entries.map((entry) {
+                          final i = entry.key;
+                          final rule = entry.value;
+                          return Row(
+                            children: [
+                              DropdownButton<RuleType>(
+                                value: rule.type,
                                 onChanged: (v) {
+                                  if (v == null) {
+                                    return;
+                                  }
                                   setLocalState(() {
                                     localRules[i] = NotificationRule(
-                                      type: rule.type,
+                                      type: v,
                                       base: rule.base,
-                                      beforeMinutes: int.tryParse(v),
+                                      beforeMinutes: rule.beforeMinutes,
                                     );
                                   });
                                 },
+                                items: const [
+                                  DropdownMenuItem(value: RuleType.main, child: Text('メイン')),
+                                  DropdownMenuItem(value: RuleType.sub, child: Text('サブ')),
+                                ],
                               ),
-                            ),
-                          ],
-                        );
-                      }),
-                    ],
-                  ),
-                );
-              },
+                              const SizedBox(width: 8),
+                              DropdownButton<RuleBase>(
+                                value: rule.base,
+                                onChanged: (v) {
+                                  if (v == null) {
+                                    return;
+                                  }
+                                  setLocalState(() {
+                                    localRules[i] = NotificationRule(
+                                      type: rule.type,
+                                      base: v,
+                                      beforeMinutes: rule.beforeMinutes,
+                                    );
+                                  });
+                                },
+                                items: const [
+                                  DropdownMenuItem(value: RuleBase.start, child: Text('開始')),
+                                  DropdownMenuItem(value: RuleBase.end, child: Text('終了')),
+                                ],
+                              ),
+                              const SizedBox(width: 8),
+                              SizedBox(
+                                width: 110,
+                                child: TextFormField(
+                                  initialValue: rule.beforeMinutes?.toString() ?? '',
+                                  decoration: const InputDecoration(labelText: '分前(null可)'),
+                                  keyboardType: TextInputType.number,
+                                  onChanged: (v) {
+                                    setLocalState(() {
+                                      localRules[i] = NotificationRule(
+                                        type: rule.type,
+                                        base: rule.base,
+                                        beforeMinutes: int.tryParse(v),
+                                      );
+                                    });
+                                  },
+                                ),
+                              ),
+                            ],
+                          );
+                        }),
+                      ],
+                    ),
+                  );
+                },
+              ),
             ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('キャンセル'),
-            ),
-            FilledButton(
-              onPressed: () async {
-                await app.applySettings(
-                  newVoiceMaxChars: int.tryParse(voiceController.text) ?? app.voiceMaxChars,
-                  newVoiceQueueMax: int.tryParse(voiceQueueController.text) ?? app.voiceQueueMax,
-                  newDisplayQueueMax:
-                      int.tryParse(displayQueueController.text) ?? app.displayQueueMax,
-                  newFadeSeconds: int.tryParse(fadeController.text) ?? app.fadeSeconds,
-                  newTimeRangeText: rangeController.text,
-                  newRules: localRules,
-                );
-                if (mounted) {
-                  Navigator.of(context).pop();
-                }
-              },
-              child: const Text('保存'),
-            ),
-          ],
-        );
-      },
-    );
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('キャンセル'),
+              ),
+              FilledButton(
+                onPressed: () async {
+                  await app.applySettings(
+                    newVoiceMaxChars: int.tryParse(voiceController.text) ?? app.voiceMaxChars,
+                    newVoiceQueueMax: int.tryParse(voiceQueueController.text) ?? app.voiceQueueMax,
+                    newDisplayQueueMax:
+                        int.tryParse(displayQueueController.text) ?? app.displayQueueMax,
+                    newFadeSeconds: int.tryParse(fadeController.text) ?? app.fadeSeconds,
+                    newTimeRangeText: rangeController.text,
+                    newSubTimeRangeText: subRangeController.text,
+                    newRules: localRules,
+                  );
+                  if (mounted) {
+                    Navigator.of(context).pop();
+                  }
+                },
+                child: const Text('保存'),
+              ),
+            ],
+          );
+        },
+      );
+    } finally {
+      app.endModalInteraction();
+    }
   }
 
   /// 数値入力用テキストフィールドを返す関数です。
@@ -850,48 +902,54 @@ class _TimerHomePageState extends State<TimerHomePage> {
 
   /// カスタムタイマー追加ダイアログを表示する関数です。
   Future<void> _openAddCustomTimerDialog(AppState app) async {
+    await app.beginModalInteraction();
     final titleController = TextEditingController();
     final minutesController = TextEditingController(text: '5');
 
-    await showDialog<void>(
-      context: context,
-      builder: (_) {
-        return AlertDialog(
-          title: const Text('カスタムタイマー追加'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: titleController,
-                decoration: const InputDecoration(labelText: 'タイトル'),
+    try {
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) {
+          return AlertDialog(
+            title: const Text('カスタムタイマー追加'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: titleController,
+                  decoration: const InputDecoration(labelText: 'タイトル'),
+                ),
+                TextField(
+                  controller: minutesController,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(labelText: '分数'),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('閉じる'),
               ),
-              TextField(
-                controller: minutesController,
-                keyboardType: TextInputType.number,
-                decoration: const InputDecoration(labelText: '分数'),
+              FilledButton(
+                onPressed: () {
+                  final mins = int.tryParse(minutesController.text) ?? 0;
+                  app.addCustomTimer(
+                    title: titleController.text,
+                    duration: Duration(minutes: mins),
+                  );
+                  Navigator.of(context).pop();
+                },
+                child: const Text('追加'),
               ),
             ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('閉じる'),
-            ),
-            FilledButton(
-              onPressed: () {
-                final mins = int.tryParse(minutesController.text) ?? 0;
-                app.addCustomTimer(
-                  title: titleController.text,
-                  duration: Duration(minutes: mins),
-                );
-                Navigator.of(context).pop();
-              },
-              child: const Text('追加'),
-            ),
-          ],
-        );
-      },
-    );
+          );
+        },
+      );
+    } finally {
+      app.endModalInteraction();
+    }
   }
 
   /// タブバーを返す関数です。
@@ -987,31 +1045,61 @@ class _TimerHomePageState extends State<TimerHomePage> {
                                         child: Column(
                                           mainAxisAlignment: MainAxisAlignment.center,
                                           children: [
-                                            Text(
-                                              app.centerTitle,
-                                              style: const TextStyle(fontSize: 14, color: Colors.white70),
-                                              textAlign: TextAlign.center,
+                                            SizedBox(
+                                              width: double.infinity,
+                                              child: Text(
+                                                app.centerTitle,
+                                                maxLines: 1,
+                                                softWrap: false,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: const TextStyle(fontSize: 14, color: Colors.white70),
+                                                textAlign: TextAlign.center,
+                                              ),
                                             ),
                                             const SizedBox(height: 8),
-                                            Text(
-                                              _formatDuration(app.centerRemaining),
-                                              style: const TextStyle(
-                                                fontSize: 34,
-                                                color: Colors.white,
-                                                fontWeight: FontWeight.bold,
+                                            SizedBox(
+                                              width: double.infinity,
+                                              child: FittedBox(
+                                                fit: BoxFit.scaleDown,
+                                                child: Text(
+                                                  _formatDuration(app.centerRemaining),
+                                                  maxLines: 1,
+                                                  softWrap: false,
+                                                  style: const TextStyle(
+                                                    fontSize: 34,
+                                                    color: Colors.white,
+                                                    fontWeight: FontWeight.bold,
+                                                  ),
+                                                  textAlign: TextAlign.center,
+                                                ),
                                               ),
-                                              textAlign: TextAlign.center,
                                             ),
                                             const SizedBox(height: 6),
-                                            Text(
-                                              app.mainNotification,
-                                              style: const TextStyle(fontSize: 13, color: Colors.cyanAccent),
-                                              textAlign: TextAlign.center,
+                                            SizedBox(
+                                              width: double.infinity,
+                                              child: Text(
+                                                app.mainNotification,
+                                                maxLines: 1,
+                                                softWrap: false,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: const TextStyle(fontSize: 13, color: Colors.cyanAccent),
+                                                textAlign: TextAlign.center,
+                                              ),
                                             ),
                                           ],
                                         ),
                                       ),
                                     ),
+                                  ),
+                                ),
+                                const SizedBox(height: 10),
+                                ClipRRect(
+                                  borderRadius: BorderRadius.circular(6),
+                                  child: LinearProgressIndicator(
+                                    minHeight: 10,
+                                    value: app.centerProgress,
+                                    backgroundColor: Colors.white24,
+                                    valueColor: const AlwaysStoppedAnimation<Color>(Colors.cyanAccent),
                                   ),
                                 ),
                                 const SizedBox(height: 14),
