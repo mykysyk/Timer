@@ -1,0 +1,15 @@
+services:
+  flutter:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: timer_flutter_dev
+    working_dir: /workspace
+    volumes:
+      - ./:/workspace
+      - flutter_pub_cache:/root/.pub-cache
+    tty: true
+    stdin_open: true
+
+volumes:
+  flutter_pub_cache:
