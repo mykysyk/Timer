@@ -900,7 +900,7 @@ class _TimerHomePageState extends State<TimerHomePage> {
       return const SizedBox.shrink();
     }
     return const Row(
-      children: const [
+      children: [
         _TabButton(label: 'Timer', enabled: true),
         _TabButton(label: 'API', enabled: false),
         _TabButton(label: 'WebSocket', enabled: false),
