@@ -19,6 +19,13 @@ docker compose run --rm flutter bash
 ./scripts/flutter.sh test
 ```
 
+## push前チェック（推奨）
+```bash
+./scripts/prepush-check.sh
+```
+
+- `analyze` と `test` を連続実行し、成功時のみ push する運用にできます。
+
 ## コンテナ内での基本コマンド
 ```bash
 flutter pub get
@@ -46,6 +53,7 @@ flutter test
 - タグ実行: `v1.0.0` のような `v*` タグ push で自動実行
 - 成果物: Actions Artifact に zip を保存
 - タグ実行時: GitHub Release に zip を自動添付
+- `.app` 名は固定せず自動検出するため、`Runner.app` 以外でもパッケージ化できます。
 
 ## Git も Docker 内で実行する
 ```bash

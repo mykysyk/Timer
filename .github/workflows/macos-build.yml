@@ -46,9 +46,17 @@ jobs:
 
       - name: Package app
         run: |
-          APP_PATH="build/macos/Build/Products/Release/Runner.app"
-          ZIP_NAME="timer-desktop-macos-${GITHUB_REF_NAME}.zip"
+          APP_PATH=$(find build/macos/Build/Products/Release -maxdepth 1 -type d -name "*.app" | head -n 1)
+          if [ -z "$APP_PATH" ]; then
+            echo "No .app bundle found under build/macos/Build/Products/Release"
+            exit 1
+          fi
+
+          REF_NAME="${GITHUB_REF_NAME:-manual}"
+          ZIP_NAME="timer-desktop-macos-${REF_NAME}.zip"
+
           ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$ZIP_NAME"
+          echo "APP_PATH=$APP_PATH" >> "$GITHUB_ENV"
           echo "ZIP_NAME=$ZIP_NAME" >> "$GITHUB_ENV"
 
       - name: Upload artifact
