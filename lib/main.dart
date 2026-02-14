@@ -573,8 +573,8 @@ class AppState extends ChangeNotifier {
       return <EventPlan>[];
     }
 
-    final DateTime start = range.item1;
-    final DateTime end = range.item2;
+    final DateTime start = range.$1;
+    final DateTime end = range.$2;
 
     final List<EventPlan> plans = <EventPlan>[];
     for (final rule in notificationRules) {
@@ -639,8 +639,8 @@ class AppState extends ChangeNotifier {
       centerProgress = 0;
       return;
     }
-    final total = range.item2.difference(range.item1).inSeconds;
-    final passed = now.difference(range.item1).inSeconds;
+    final total = range.$2.difference(range.$1).inSeconds;
+    final passed = now.difference(range.$1).inSeconds;
     if (total <= 0) {
       centerProgress = 0;
       return;
@@ -899,7 +899,7 @@ class _TimerHomePageState extends State<TimerHomePage> {
     if (faded) {
       return const SizedBox.shrink();
     }
-    return Row(
+    return const Row(
       children: const [
         _TabButton(label: 'Timer', enabled: true),
         _TabButton(label: 'API', enabled: false),
@@ -1045,7 +1045,7 @@ class _TimerHomePageState extends State<TimerHomePage> {
                                       final remain = _formatDuration(timer.remaining(app.now));
                                       return Card(
                                         color: timer.finished
-                                            ? Colors.redAccent.withOpacity(0.25)
+                                            ? Colors.redAccent.withValues(alpha: 0.25)
                                             : Colors.white10,
                                         child: ListTile(
                                           title: Text(
@@ -1100,7 +1100,7 @@ class _TabButton extends StatelessWidget {
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(8),
           color: enabled ? Colors.white12 : Colors.white10,
-          border: Border.all(color: color.withOpacity(0.6)),
+          border: Border.all(color: color.withValues(alpha: 0.6)),
         ),
         child: Text(label, style: TextStyle(color: color)),
       ),
@@ -1198,7 +1198,7 @@ class _MarqueeTextState extends State<MarqueeText>
   /// マルキー表示を描画する関数です。
   @override
   Widget build(BuildContext context) {
-    final style = const TextStyle(fontSize: 14, color: Colors.white70);
+    const style = TextStyle(fontSize: 14, color: Colors.white70);
     return LayoutBuilder(
       builder: (context, constraints) {
         final tp = TextPainter(

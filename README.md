@@ -56,6 +56,6 @@ flutter test
 ```
 
 - `scripts/git.sh` は UID/GID をホストに合わせて実行するため、権限崩れを避けられます。
-- `~/.ssh` があれば読み取り専用でコンテナに渡します。
+- `~/.ssh` があれば読み取り専用でコンテナに渡します（`known_hosts` は `.codex-git-home/.ssh/` に保存）。
 - Git の `--global` 設定はプロジェクト内の `.codex-git-home/` に保存され、ホスト環境設定は汚れません。
 - `docker compose` と `docker-compose` のどちらの環境でも動作するようにしています。

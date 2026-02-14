@@ -31,13 +31,17 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 GIT_HOME_HOST="$PROJECT_ROOT/.codex-git-home"
 mkdir -p "$GIT_HOME_HOST"
+mkdir -p "$GIT_HOME_HOST/.ssh"
 
 EXTRA_ARGS+=("-v" "$GIT_HOME_HOST:/tmp/codex-home")
+EXTRA_ARGS+=("-v" "/etc/passwd:/etc/passwd:ro")
+EXTRA_ARGS+=("-v" "/etc/group:/etc/group:ro")
 
 if [ -d "$HOME/.ssh" ]; then
-  EXTRA_ARGS+=("-v" "$HOME/.ssh:/tmp/codex-home/.ssh:ro")
+  EXTRA_ARGS+=("-v" "$HOME/.ssh:/tmp/host-ssh:ro")
 fi
 
 EXTRA_ARGS+=("-e" "HOME=/tmp/codex-home")
+EXTRA_ARGS+=("-e" "GIT_SSH_COMMAND=ssh -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/tmp/codex-home/.ssh/known_hosts -o IdentitiesOnly=yes -o IdentityFile=/tmp/codex-home/.ssh/id_ed25519 -o IdentityFile=/tmp/host-ssh/id_ed25519 -o IdentityFile=/tmp/host-ssh/id_rsa -o IdentityFile=/tmp/host-ssh/id_ecdsa")
 
 exec "${COMPOSE_CMD[@]}" run "${EXTRA_ARGS[@]}" flutter git -c safe.directory=/workspace "$@"
