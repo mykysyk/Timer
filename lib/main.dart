@@ -732,6 +732,10 @@ class _TimerHomePageState extends State<TimerHomePage> {
   /// 設定ダイアログを表示する関数です。
   Future<void> _openSettingsDialog(AppState app) async {
     await app.beginModalInteraction();
+    if (!mounted) {
+      app.endModalInteraction();
+      return;
+    }
     final voiceController = TextEditingController(text: app.voiceMaxChars.toString());
     final voiceQueueController = TextEditingController(text: app.voiceQueueMax.toString());
     final displayQueueController = TextEditingController(text: app.displayQueueMax.toString());
@@ -903,6 +907,10 @@ class _TimerHomePageState extends State<TimerHomePage> {
   /// カスタムタイマー追加ダイアログを表示する関数です。
   Future<void> _openAddCustomTimerDialog(AppState app) async {
     await app.beginModalInteraction();
+    if (!mounted) {
+      app.endModalInteraction();
+      return;
+    }
     final titleController = TextEditingController();
     final minutesController = TextEditingController(text: '5');
 
